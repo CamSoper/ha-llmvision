@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import asyncio
 import boto3
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -332,22 +333,35 @@ class Provider(ABC):
     async def _post(self, url, headers, data) -> dict:
         """Post data to url and return response data"""
         _LOGGER.info(f"Request data: {Request.sanitize_data(data)}")
+        provider = inspect.stack()[1].frame.f_locals["self"].__class__.__name__.lower()
+        max_retries = 5
+        delay = 1  # Initial delay in seconds
 
-        try:
-            _LOGGER.info(f"Posting to {url}")
-            response = await self.session.post(url, headers=headers, json=data)
-        except Exception as e:
-            raise ServiceValidationError(f"Request failed: {e}")
+        for attempt in range(max_retries):
+            try:
+                _LOGGER.info(f"Posting to {url}")
+                response = await self.session.post(url, headers=headers, json=data)
 
-        if response.status != 200:
-            frame = inspect.stack()[1]
-            provider = frame.frame.f_locals["self"].__class__.__name__.lower()
-            parsed_response = await self._resolve_error(response, provider)
-            raise ServiceValidationError(parsed_response)
-        else:
-            response_data = await response.json()
-            _LOGGER.info(f"Response data: {response_data}")
-            return response_data
+                if response.status == 200:
+                    response_data = await response.json()
+                    _LOGGER.info(f"Response data: {response_data}")
+                    return response_data
+                elif response.status == 429 and provider == "google":
+                    if attempt < max_retries - 1:
+                        _LOGGER.warning(
+                            f"Rate limit hit. Retrying in {delay} seconds... (Attempt {attempt + 1}/{max_retries})"
+                        )
+                        await asyncio.sleep(delay)
+                        delay *= 2  # Exponential backoff
+                    else:
+                        _LOGGER.error("Max retries reached. Operation failed.")
+                        parsed_response = await self._resolve_error(response, provider)
+                        raise ServiceValidationError(parsed_response)
+                else:
+                    parsed_response = await self._resolve_error(response, provider)
+                    raise ServiceValidationError(parsed_response)
+            except Exception as e:
+                raise ServiceValidationError(f"Request failed: {e}")
 
     async def _resolve_error(self, response, provider) -> str:
         """Translate response status to error message"""
