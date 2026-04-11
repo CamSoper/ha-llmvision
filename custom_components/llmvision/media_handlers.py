@@ -497,14 +497,6 @@ class MediaProcessor:
 
         # Add selected frames to client
         if selected_frames:
-            # Choose keyframe among the selected frames using the last as reference
-            reference_bytes = selected_frames[-1][1]
-            candidate_bytes = [data for _, data, _ in selected_frames]
-            key_idx = await self._select_keyframe_index(
-                reference_bytes, candidate_bytes
-            )
-
-            # Add all frames (resized) and expose only the chosen keyframe
             resized_base64 = []
             for frame_name, frame_data, _ in selected_frames:
                 resized_image = await self.resize_image(

@@ -578,6 +578,21 @@ def _extract_and_strip_best_frame(response, candidate_frames):
     return _match_best_frame(best_frame_label, candidate_frames)
 
 
+async def _resolve_llm_keyframe(processor, call, response):
+    """After LLM response, extract its keyframe pick or fall back to SSIM."""
+    if not (call.llm_pick_keyframe and call.expose_images and processor.candidate_frames):
+        return
+    best_idx = _extract_and_strip_best_frame(response, processor.candidate_frames)
+    if best_idx is not None:
+        await processor.expose_keyframe_by_index(best_idx)
+    else:
+        _LOGGER.warning(
+            "LLM did not return a valid best_frame, "
+            "falling back to SSIM-based selection"
+        )
+        await processor.select_and_expose_keyframe()
+
+
 async def _create_event(
     hass,
     call: ServiceCallData,
@@ -730,7 +745,6 @@ def setup(hass, config):
         # Validate configuration, input data and make the call
         response = await request.call(call)
         _LOGGER.info(f"Response: {response}")
-        # Add processor.key_frame to response if it exists
         if processor.key_frame:
             _LOGGER.info(f"Key frame: {processor.key_frame}")
             response["key_frame"] = processor.key_frame
@@ -766,7 +780,6 @@ def setup(hass, config):
             expose_images=call.expose_images,
         )
 
-        # If not deferring to LLM, select keyframe now via SSIM
         if call.expose_images and not call.llm_pick_keyframe:
             await processor.select_and_expose_keyframe()
 
@@ -774,20 +787,8 @@ def setup(hass, config):
         await call.memory._update_memory()
 
         response = await request.call(call)
+        await _resolve_llm_keyframe(processor, call, response)
 
-        # If deferring to LLM, extract its pick and expose
-        if call.llm_pick_keyframe and call.expose_images and processor.candidate_frames:
-            best_idx = _extract_and_strip_best_frame(response, processor.candidate_frames)
-            if best_idx is not None:
-                await processor.expose_keyframe_by_index(best_idx)
-            else:
-                _LOGGER.warning(
-                    "LLM did not return a valid best_frame, "
-                    "falling back to SSIM-based selection"
-                )
-                await processor.select_and_expose_keyframe()
-
-        # Add processor.key_frame to response if it exists
         if processor.key_frame:
             response["key_frame"] = processor.key_frame
 
@@ -824,7 +825,6 @@ def setup(hass, config):
             expose_images=call.expose_images,
         )
 
-        # If not deferring to LLM, select keyframe now via SSIM
         if call.expose_images and not call.llm_pick_keyframe:
             await processor.select_and_expose_keyframe()
 
@@ -832,20 +832,8 @@ def setup(hass, config):
         await call.memory._update_memory()
 
         response = await request.call(call)
+        await _resolve_llm_keyframe(processor, call, response)
 
-        # If deferring to LLM, extract its pick and expose
-        if call.llm_pick_keyframe and call.expose_images and processor.candidate_frames:
-            best_idx = _extract_and_strip_best_frame(response, processor.candidate_frames)
-            if best_idx is not None:
-                await processor.expose_keyframe_by_index(best_idx)
-            else:
-                _LOGGER.warning(
-                    "LLM did not return a valid best_frame, "
-                    "falling back to SSIM-based selection"
-                )
-                await processor.select_and_expose_keyframe()
-
-        # Add processor.key_frame to response if it exists
         if processor.key_frame:
             response["key_frame"] = processor.key_frame
 
@@ -924,7 +912,6 @@ def setup(hass, config):
         await call.memory._update_memory()
 
         response = await request.call(call)
-        # Add processor.key_frame to response if it exists
         if processor.key_frame:
             response["key_frame"] = processor.key_frame
 
