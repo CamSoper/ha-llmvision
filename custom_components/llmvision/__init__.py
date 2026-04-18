@@ -10,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import SupportsResponse
 from homeassistant.exceptions import ServiceValidationError
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from .api import TimelineEventView, TimelineEventsView, TimelineEventCreateView
 
 import logging
@@ -75,6 +76,7 @@ from .const import (
     STRUCTURE,
     TITLE_FIELD,
     DESCRIPTION_FIELD,
+    SIGNAL_TIMELINE_UPDATED,
 )
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -652,6 +654,7 @@ async def _create_event(
             camera_name=camera_name,
             label="",
         )
+        async_dispatcher_send(hass, SIGNAL_TIMELINE_UPDATED)
 
 
 async def _update_sensor(hass, sensor_entity: str, value: str | int, type: str) -> None:
@@ -959,6 +962,7 @@ def setup(hass, config):
             camera_name=call.camera_entity,
             label=call.label.lower(),
         )
+        async_dispatcher_send(hass, SIGNAL_TIMELINE_UPDATED)
 
     # Register actions
     hass.services.register(
