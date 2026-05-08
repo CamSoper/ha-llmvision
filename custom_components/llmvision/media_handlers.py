@@ -319,6 +319,9 @@ class MediaProcessor:
         # Track successful image entities (cameras that successfully captured frames)
         successful_image_entities = set()
 
+        # Shared time origin so timestamps from every camera land on one timeline.
+        record_start_time = time.time()
+
         # Record on a separate thread for each camera
         async def record_camera(image_entity, camera_number):
             start = time.time()
@@ -331,6 +334,7 @@ class MediaProcessor:
 
             while time.time() - start < duration + iteration_time:
                 fetch_start_time = time.time()
+                frame_timestamp = fetch_start_time - record_start_time
                 entity_state = self.hass.states.get(image_entity)
 
                 # Check if entity exists
@@ -395,6 +399,7 @@ class MediaProcessor:
                                 frame_label: {
                                     "frame_data": frame_data,
                                     "ssim_score": score,
+                                    "timestamp": frame_timestamp,
                                 }
                             }
                         )
@@ -421,7 +426,11 @@ class MediaProcessor:
                                 str(frame_counter),
                             ]
                         frame_label = "-".join(parts)
-                        first_frames[image_entity] = (frame_label, first_bytes)
+                        first_frames[image_entity] = (
+                            frame_label,
+                            first_bytes,
+                            frame_timestamp,
+                        )
                         # Mark this camera as successful
                         successful_image_entities.add(image_entity)
                         frame_counter += 1
@@ -464,53 +473,60 @@ class MediaProcessor:
                 "No cameras available - all cameras offline or unavailable"
             )
 
-        # Extract frames and their SSIM scores
         frames_with_scores = []
         for frame in camera_frames:
             for frame_name, frame_data in camera_frames[frame].items():
                 frames_with_scores.append(
-                    (frame_name, frame_data["frame_data"], frame_data["ssim_score"])
+                    (
+                        frame_name,
+                        frame_data["frame_data"],
+                        frame_data["ssim_score"],
+                        frame_data["timestamp"],
+                    )
                 )
 
-        # Sort frames by SSIM score
+        # Rank by SSIM (most-different first) so selection picks high-motion frames.
         frames_with_scores.sort(key=lambda x: x[2])
 
-        # Frame selection: prepend first frames, then best-scored (respect max_frames)
         selected_frames = []
         remaining = max(0, max_frames)
 
-        # Prepend first frames in the order of requested entities
         for entity in image_entities:
             if remaining <= 0:
                 break
             if entity in first_frames:
-                label, data = first_frames[entity]
-                selected_frames.append((label, data, None))
+                label, data, timestamp = first_frames[entity]
+                selected_frames.append((label, data, timestamp))
                 remaining -= 1
 
-        # Fill remaining slots with best scored frames
-        for name, data, score in frames_with_scores:
+        for name, data, _score, timestamp in frames_with_scores:
             if remaining <= 0:
                 break
-            selected_frames.append((name, data, score))
+            selected_frames.append((name, data, timestamp))
             remaining -= 1
 
-        # Add selected frames to client
+        # Reorder chronologically across cameras: smaller vision models confabulate
+        # motion when frames arrive in SSIM/selection order instead of in time order.
+        selected_frames.sort(key=lambda x: x[2])
+
         if selected_frames:
             resized_base64 = []
-            for frame_name, frame_data, _ in selected_frames:
+            timed_labels = []
+            for label, frame_data, timestamp in selected_frames:
                 resized_image = await self.resize_image(
                     target_width=target_width, image_data=frame_data
                 )
                 resized_base64.append(resized_image)
-                self.client.add_frame(base64_image=resized_image, filename=frame_name)
+                timed_label = f"{label} [t+{timestamp:.1f}s]"
+                timed_labels.append(timed_label)
+                self.client.add_frame(
+                    base64_image=resized_image, filename=timed_label
+                )
 
             if expose_images:
                 self.candidate_frames = [
-                    (fname, rb64, fname.split("-")[0])
-                    for (fname, _, _), rb64 in zip(
-                        selected_frames, resized_base64
-                    )
+                    (timed_label, rb64, timed_label.split("-")[0])
+                    for timed_label, rb64 in zip(timed_labels, resized_base64)
                 ]
 
     async def add_images(
