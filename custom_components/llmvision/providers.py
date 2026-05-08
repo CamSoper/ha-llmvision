@@ -1040,6 +1040,19 @@ class Google(Provider):
             },
         }
 
+        # Gemini 3.x introduced media_resolution to control per-image token allocation.
+        # Default for Gemini 3 is HIGH (~1120 tokens/image). For surveillance-style
+        # analysis (people, vehicles, motion, clothing colors) where fine text
+        # reading isn't required, MEDIUM (~560 tokens/image) cuts image token spend
+        # roughly in half with negligible accuracy loss on full-strength Flash.
+        # Gated narrowly on gemini-3-flash so:
+        #   - gemini-3-flash-* gets MEDIUM (good enough for surveillance)
+        #   - gemini-3.1-flash-lite-* stays at HIGH (Lite needs every pixel)
+        #   - gemini-3-pro-* stays at HIGH (if you're paying for Pro, get the detail)
+        #   - All Gemini 2.x: parameter has no effect, no-op
+        if self.model and self.model.startswith("gemini-3-flash"):
+            payload["generationConfig"]["mediaResolution"] = "MEDIA_RESOLUTION_MEDIUM"
+
         # Add structured output support
         if call.response_format == "json" and call.structure:
             import json
