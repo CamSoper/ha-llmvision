@@ -1040,18 +1040,21 @@ class Google(Provider):
             },
         }
 
-        # Gemini 3.x introduced media_resolution to control per-image token allocation.
-        # Default for Gemini 3 is HIGH (~1120 tokens/image). For surveillance-style
-        # analysis (people, vehicles, motion, clothing colors) where fine text
-        # reading isn't required, MEDIUM (~560 tokens/image) cuts image token spend
-        # roughly in half with negligible accuracy loss on full-strength Flash.
-        # Gated narrowly on gemini-3-flash so:
-        #   - gemini-3-flash-* gets MEDIUM (good enough for surveillance)
-        #   - gemini-3.1-flash-lite-* stays at HIGH (Lite needs every pixel)
-        #   - gemini-3-pro-* stays at HIGH (if you're paying for Pro, get the detail)
-        #   - All Gemini 2.x: parameter has no effect, no-op
-        if self.model and self.model.startswith("gemini-3-flash"):
-            payload["generationConfig"]["mediaResolution"] = "MEDIA_RESOLUTION_MEDIUM"
+        # Gemini 3.x exposes media_resolution to control per-image token allocation
+        # (low ≈ 256, medium ≈ 560, high ≈ 1120 tokens/image). Opt-in per service
+        # call; unset/unknown values are dropped so Gemini applies its own default.
+        # ULTRA_HIGH is intentionally not exposed: per Google's docs it's only
+        # valid as a per-part override, not a global generationConfig setting.
+        media_resolution = getattr(call, "media_resolution", None)
+        if isinstance(media_resolution, str):
+            normalized = media_resolution.strip().lower()
+            mapping = {
+                "low": "MEDIA_RESOLUTION_LOW",
+                "medium": "MEDIA_RESOLUTION_MEDIUM",
+                "high": "MEDIA_RESOLUTION_HIGH",
+            }
+            if normalized in mapping:
+                payload["generationConfig"]["mediaResolution"] = mapping[normalized]
 
         # Add structured output support
         if call.response_format == "json" and call.structure:

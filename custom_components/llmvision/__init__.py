@@ -58,6 +58,7 @@ from .const import (
     LLM_PICK_KEYFRAME,
     GENERATE_TITLE,
     SENSOR_ENTITY,
+    MEDIA_RESOLUTION,
     DATA_EXTRACTION_PROMPT,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_ANTHROPIC_MODEL,
@@ -478,6 +479,7 @@ class ServiceCallData:
         self.structure = data_call.data.get(STRUCTURE, None)
         self.title_field = data_call.data.get(TITLE_FIELD, "")
         self.description_field = data_call.data.get(DESCRIPTION_FIELD, "")
+        self.media_resolution = data_call.data.get(MEDIA_RESOLUTION)
         self.memory: Memory | None = None
 
         # ------------ Create Event ------------

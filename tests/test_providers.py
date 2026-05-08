@@ -309,11 +309,107 @@ class TestGoogle:
         """Test _generate_headers method."""
         with patch('custom_components.llmvision.providers.async_get_clientsession'):
             google = Google(mock_hass_with_session, "test_api_key", "gemini-pro")
-            
+
             headers = google._generate_headers()
-            
+
             assert headers["content-type"] == "application/json"
 
+    def _make_google_call(self, media_resolution=None):
+        """Build a mock service call for Google._prepare_vision_data tests."""
+        call = Mock()
+        call.max_tokens = 1000
+        call.base64_images = []
+        call.filenames = []
+        call.message = "Describe"
+        call.provider = "test_provider"
+        call.response_format = "text"
+        call.structure = None
+        call.use_memory = False
+        call.media_resolution = media_resolution
+        return call
+
+    def _prepare_google_payload(self, mock_hass, model, call):
+        """Run Google._prepare_vision_data with stable defaults."""
+        mock_hass.data = {
+            DOMAIN: {
+                "test_provider": {
+                    "provider": "Google",
+                    "temperature": 0.5,
+                    "top_p": 0.9,
+                }
+            }
+        }
+        with patch('custom_components.llmvision.providers.async_get_clientsession'):
+            google = Google(mock_hass, "test_api_key", model)
+            with patch.object(google, '_get_system_prompt', return_value="System"):
+                return google._prepare_vision_data(call)
+
+    def test_prepare_vision_data_no_media_resolution(self, mock_hass_with_session):
+        """Unset media_resolution -> no mediaResolution key in generationConfig."""
+        call = self._make_google_call(media_resolution=None)
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-flash", call
+        )
+        assert "mediaResolution" not in result["generationConfig"]
+
+    def test_prepare_vision_data_low(self, mock_hass_with_session):
+        """media_resolution='low' -> MEDIA_RESOLUTION_LOW."""
+        call = self._make_google_call(media_resolution="low")
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-pro", call
+        )
+        assert result["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_LOW"
+
+    def test_prepare_vision_data_medium(self, mock_hass_with_session):
+        """media_resolution='medium' -> MEDIA_RESOLUTION_MEDIUM."""
+        call = self._make_google_call(media_resolution="medium")
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-pro", call
+        )
+        assert result["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_MEDIUM"
+
+    def test_prepare_vision_data_high(self, mock_hass_with_session):
+        """media_resolution='high' -> MEDIA_RESOLUTION_HIGH."""
+        call = self._make_google_call(media_resolution="high")
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-pro", call
+        )
+        assert result["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_HIGH"
+
+    @pytest.mark.parametrize("value", ["LOW", "Low", "low", " low ", "lOw"])
+    def test_prepare_vision_data_case_insensitive(self, mock_hass_with_session, value):
+        """media_resolution is case-insensitive."""
+        call = self._make_google_call(media_resolution=value)
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-pro", call
+        )
+        assert result["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_LOW"
+
+    def test_prepare_vision_data_garbage_value(self, mock_hass_with_session):
+        """Unknown values are silently dropped."""
+        call = self._make_google_call(media_resolution="garbage")
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-pro", call
+        )
+        assert "mediaResolution" not in result["generationConfig"]
+
+    def test_prepare_vision_data_ultra_high_not_exposed(self, mock_hass_with_session):
+        """ULTRA_HIGH is not exposed as a global setting and is dropped."""
+        call = self._make_google_call(media_resolution="ultra_high")
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-pro", call
+        )
+        assert "mediaResolution" not in result["generationConfig"]
+
+    def test_prepare_vision_data_gemini_3_flash_default_unchanged(
+        self, mock_hass_with_session
+    ):
+        """Previous gemini-3-flash hardcoded default is gone: no media_resolution -> no key."""
+        call = self._make_google_call(media_resolution=None)
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-flash-latest", call
+        )
+        assert "mediaResolution" not in result["generationConfig"]
 
 
 class TestProviderBase:

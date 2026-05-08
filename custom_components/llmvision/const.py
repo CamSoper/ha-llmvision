@@ -77,6 +77,7 @@ EXPOSE_IMAGES = "expose_images"
 GENERATE_TITLE = "generate_title"
 SENSOR_ENTITY = "sensor_entity"
 LLM_PICK_KEYFRAME = "llm_pick_keyframe"
+MEDIA_RESOLUTION = "media_resolution"
 
 # Error messages
 ERROR_NOT_CONFIGURED = "{provider} is not configured"
