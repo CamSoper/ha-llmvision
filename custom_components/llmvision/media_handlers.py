@@ -319,9 +319,6 @@ class MediaProcessor:
         # Track successful image entities (cameras that successfully captured frames)
         successful_image_entities = set()
 
-        # Shared time origin so timestamps from every camera land on one timeline.
-        record_start_time = time.time()
-
         # Record on a separate thread for each camera
         async def record_camera(image_entity, camera_number):
             start = time.time()
@@ -334,7 +331,6 @@ class MediaProcessor:
 
             while time.time() - start < duration + iteration_time:
                 fetch_start_time = time.time()
-                frame_timestamp = fetch_start_time - record_start_time
                 entity_state = self.hass.states.get(image_entity)
 
                 # Check if entity exists
@@ -385,13 +381,13 @@ class MediaProcessor:
                             parts = [
                                 image_entity.replace("camera.", ""),
                                 "frame",
-                                str(frame_counter),
+                                f"{frame_counter:02d}",
                             ]
                         else:
                             parts = [
                                 f"camera{camera_number}",
                                 "frame",
-                                str(frame_counter),
+                                f"{frame_counter:02d}",
                             ]
                         frame_label = "-".join(parts)
                         frames.update(
@@ -399,7 +395,6 @@ class MediaProcessor:
                                 frame_label: {
                                     "frame_data": frame_data,
                                     "ssim_score": score,
-                                    "timestamp": frame_timestamp,
                                 }
                             }
                         )
@@ -417,20 +412,16 @@ class MediaProcessor:
                             parts = [
                                 image_entity.replace("camera.", ""),
                                 "frame",
-                                str(frame_counter),
+                                f"{frame_counter:02d}",
                             ]
                         else:
                             parts = [
                                 f"camera{camera_number}",
                                 "frame",
-                                str(frame_counter),
+                                f"{frame_counter:02d}",
                             ]
                         frame_label = "-".join(parts)
-                        first_frames[image_entity] = (
-                            frame_label,
-                            first_bytes,
-                            frame_timestamp,
-                        )
+                        first_frames[image_entity] = (frame_label, first_bytes)
                         # Mark this camera as successful
                         successful_image_entities.add(image_entity)
                         frame_counter += 1
@@ -481,7 +472,6 @@ class MediaProcessor:
                         frame_name,
                         frame_data["frame_data"],
                         frame_data["ssim_score"],
-                        frame_data["timestamp"],
                     )
                 )
 
@@ -495,38 +485,50 @@ class MediaProcessor:
             if remaining <= 0:
                 break
             if entity in first_frames:
-                label, data, timestamp = first_frames[entity]
-                selected_frames.append((label, data, timestamp))
+                label, data = first_frames[entity]
+                selected_frames.append((label, data))
                 remaining -= 1
 
-        for name, data, _score, timestamp in frames_with_scores:
+        for name, data, _score in frames_with_scores:
             if remaining <= 0:
                 break
-            selected_frames.append((name, data, timestamp))
+            selected_frames.append((name, data))
             remaining -= 1
 
-        # Reorder chronologically across cameras: smaller vision models confabulate
-        # motion when frames arrive in SSIM/selection order instead of in time order.
-        selected_frames.sort(key=lambda x: x[2])
+        # Group by camera in image_entities order; within each camera, sort by
+        # capture order (zero-padded frame counter sorts lexically). Burned-in
+        # overlay timestamps let the LLM correlate across cameras; HA-side
+        # request times are unreliable on cameras that serve stale snapshots.
+        camera_name_order = [
+            entity.replace("camera.", "") if include_filename else f"camera{idx}"
+            for idx, entity in enumerate(image_entities)
+        ]
+        groups = {name: [] for name in camera_name_order}
+        for label, data in selected_frames:
+            groups[label.split("-")[0]].append((label, data))
+
+        ordered_frames = []
+        for name in camera_name_order:
+            ordered_frames.extend(sorted(groups[name], key=lambda x: x[0]))
+        selected_frames = ordered_frames
 
         if selected_frames:
             resized_base64 = []
-            timed_labels = []
-            for label, frame_data, timestamp in selected_frames:
+            labels = []
+            for label, frame_data in selected_frames:
                 resized_image = await self.resize_image(
                     target_width=target_width, image_data=frame_data
                 )
                 resized_base64.append(resized_image)
-                timed_label = f"{label} [t+{timestamp:.1f}s]"
-                timed_labels.append(timed_label)
+                labels.append(label)
                 self.client.add_frame(
-                    base64_image=resized_image, filename=timed_label
+                    base64_image=resized_image, filename=label
                 )
 
             if expose_images:
                 self.candidate_frames = [
-                    (timed_label, rb64, timed_label.split("-")[0])
-                    for timed_label, rb64 in zip(timed_labels, resized_base64)
+                    (label, rb64, label.split("-")[0])
+                    for label, rb64 in zip(labels, resized_base64)
                 ]
 
     async def add_images(
