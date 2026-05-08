@@ -272,6 +272,20 @@ class TestMatchBestFrame:
         """Test returns None with empty string label."""
         assert _match_best_frame("", self._make_candidates()) is None
 
+    def test_zero_padded_label_format(self):
+        """Regression: zero-padded labels (new format) still match exactly,
+        and the partial-match fallback still tolerates trailing punctuation
+        the LLM sometimes appends (e.g. a colon)."""
+        candidates = [
+            ("camera0-frame-05", "b64data1", "camera0"),
+            ("camera0-frame-06", "b64data2", "camera0"),
+            ("camera0-frame-15", "b64data3", "camera0"),
+        ]
+        # Exact match against the new zero-padded label.
+        assert _match_best_frame("camera0-frame-05", candidates) == 0
+        # Partial-match fallback still resolves trailing-punctuation noise.
+        assert _match_best_frame("camera0-frame-15:", candidates) == 2
+
 
 class TestExtractAndStripBestFrame:
     """Test _extract_and_strip_best_frame function."""
