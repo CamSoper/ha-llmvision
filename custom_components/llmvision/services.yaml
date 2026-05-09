@@ -99,6 +99,16 @@ image_analyzer:
       default: false
       selector:
         boolean:
+    media_resolution:
+      name: Media Resolution
+      required: false
+      description: "Token allocation per image (Gemini 3.x only; ignored by other providers). 'low' ≈ 256 tokens/image, 'medium' ≈ 560, 'high' ≈ 1120. Lower saves token spend; higher preserves fine detail like small text."
+      selector:
+        select:
+          options:
+            - "low"
+            - "medium"
+            - "high"
     response_format:
       name: Response Format
       description: Format of the response - text for natural language or json for structured data
@@ -253,6 +263,16 @@ video_analyzer:
       default: false
       selector:
         boolean:
+    media_resolution:
+      name: Media Resolution
+      required: false
+      description: "Token allocation per image (Gemini 3.x only; ignored by other providers). 'low' ≈ 256 tokens/image, 'medium' ≈ 560, 'high' ≈ 1120. Lower saves token spend; higher preserves fine detail like small text."
+      selector:
+        select:
+          options:
+            - "low"
+            - "medium"
+            - "high"
     response_format:
       name: Response Format
       description: Format of the response - text for natural language or json for structured data
@@ -410,6 +430,16 @@ stream_analyzer:
       default: false
       selector:
         boolean:
+    media_resolution:
+      name: Media Resolution
+      required: false
+      description: "Token allocation per image (Gemini 3.x only; ignored by other providers). 'low' ≈ 256 tokens/image, 'medium' ≈ 560, 'high' ≈ 1120. Lower saves token spend; higher preserves fine detail like small text."
+      selector:
+        select:
+          options:
+            - "low"
+            - "medium"
+            - "high"
     response_format:
       name: Response Format
       description: Format of the response - text for natural language or json for structured data
@@ -557,6 +587,16 @@ data_analyzer:
       default: false
       selector:
         boolean:
+    media_resolution:
+      name: Media Resolution
+      required: false
+      description: "Token allocation per image (Gemini 3.x only; ignored by other providers). 'low' ≈ 256 tokens/image, 'medium' ≈ 560, 'high' ≈ 1120. Lower saves token spend; higher preserves fine detail like small text."
+      selector:
+        select:
+          options:
+            - "low"
+            - "medium"
+            - "high"
 
 create_event:
   name: Create Event
