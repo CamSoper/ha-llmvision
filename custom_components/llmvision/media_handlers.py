@@ -395,6 +395,8 @@ class MediaProcessor:
                                 frame_label: {
                                     "frame_data": frame_data,
                                     "ssim_score": score,
+                                    "camera_number": camera_number,
+                                    "frame_index": frame_counter,
                                 }
                             }
                         )
@@ -445,10 +447,10 @@ class MediaProcessor:
 
             camera_frames.update({image_entity: frames})
 
-        _LOGGER.info(
-            f"Recording {', '.join([entity.replace(
-            'camera.', '') for entity in image_entities])} for {duration} seconds"
+        camera_names = ", ".join(
+            entity.replace("camera.", "") for entity in image_entities
         )
+        _LOGGER.info(f"Recording {camera_names} for {duration} seconds")
 
         # start threads for each camera
         await asyncio.gather(
