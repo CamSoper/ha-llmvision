@@ -815,6 +815,14 @@ class TestGoogle:
 
             assert google._model_supports_thinking() is True
 
+    def test_model_supports_thinking_ga_gemini_3x(self, mock_hass):
+        """Test _model_supports_thinking for GA Gemini 3.x models."""
+        with patch("custom_components.llmvision.providers.async_get_clientsession"):
+            for model in ("gemini-3.6-flash", "gemini-3.5-flash-lite"):
+                google = Google(mock_hass, "test_api_key", model)
+
+                assert google._model_supports_thinking() is True
+
     def test_model_does_not_support_thinking(self, mock_hass):
         """Test _model_supports_thinking for older models."""
         with patch("custom_components.llmvision.providers.async_get_clientsession"):
