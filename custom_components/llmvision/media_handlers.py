@@ -36,6 +36,7 @@ class MediaProcessor:
         self.filenames = []
         self.snapshots_path = f"/media/{DOMAIN}/snapshots/"
         self.key_frame = ""
+        self.candidate_frames = []  # [(label, base64_data, expose_name)]
 
     async def _encode_image(self, img):
         """Encode image as base64"""
@@ -91,6 +92,28 @@ class MediaProcessor:
                     await self.hass.loop.run_in_executor(None, image.load)
                     image_data = await self._encode_image(image)
             await self._save_clip(image_data=image_data, image_path=filename)
+
+    async def expose_keyframe_by_index(self, idx):
+        """Save a specific candidate frame as the key_frame."""
+        label, b64_data, expose_name = self.candidate_frames[idx]
+        await self._expose_image(
+            frame_name=expose_name,
+            image_data=b64_data,
+            uid=str(uuid.uuid4())[:8],
+        )
+
+    async def select_and_expose_keyframe(self):
+        """Select keyframe via SSIM from stashed candidates and expose it."""
+        if not self.candidate_frames:
+            return
+        candidate_bytes = [
+            base64.b64decode(b64) for _, b64, _ in self.candidate_frames
+        ]
+        reference_bytes = candidate_bytes[-1]
+        key_idx = await self._select_keyframe_index(
+            reference_bytes, candidate_bytes
+        )
+        await self.expose_keyframe_by_index(key_idx)
 
     def _similarity_score(self, previous_frame, current_frame_gray):
         """
@@ -358,13 +381,13 @@ class MediaProcessor:
                             parts = [
                                 image_entity.replace("camera.", ""),
                                 "frame",
-                                str(frame_counter),
+                                f"{frame_counter:02d}",
                             ]
                         else:
                             parts = [
                                 f"camera{camera_number}",
                                 "frame",
-                                str(frame_counter),
+                                f"{frame_counter:02d}",
                             ]
                         frame_label = "-".join(parts)
                         frames.update(
@@ -391,13 +414,13 @@ class MediaProcessor:
                             parts = [
                                 image_entity.replace("camera.", ""),
                                 "frame",
-                                str(frame_counter),
+                                f"{frame_counter:02d}",
                             ]
                         else:
                             parts = [
                                 f"camera{camera_number}",
                                 "frame",
-                                str(frame_counter),
+                                f"{frame_counter:02d}",
                             ]
                         frame_label = "-".join(parts)
                         first_frames[image_entity] = (frame_label, first_bytes)
@@ -443,7 +466,6 @@ class MediaProcessor:
                 "No cameras available - all cameras offline or unavailable"
             )
 
-        # Extract frames and their SSIM scores
         frames_with_scores = []
         for frame in camera_frames:
             for frame_name, frame_data in camera_frames[frame].items():
@@ -452,59 +474,64 @@ class MediaProcessor:
                         frame_name,
                         frame_data["frame_data"],
                         frame_data["ssim_score"],
-                        frame_data["camera_number"],
-                        frame_data["frame_index"],
                     )
                 )
 
-        # Sort frames by SSIM score
+        # Rank by SSIM (most-different first) so selection picks high-motion frames.
         frames_with_scores.sort(key=lambda x: x[2])
 
-        # Frame selection: prepend first frames, then best-scored (respect max_frames)
         selected_frames = []
         remaining = max(0, max_frames)
 
-        # Prepend first frames in the order of requested entities
         for entity in image_entities:
             if remaining <= 0:
                 break
             if entity in first_frames:
                 label, data = first_frames[entity]
-                selected_frames.append((label, data, None))
+                selected_frames.append((label, data))
                 remaining -= 1
 
-        # Fill remaining slots with best scored frames, then restore stable capture order
-        best_rest = frames_with_scores[:remaining]
-        best_rest.sort(key=lambda x: (x[4], x[3]))
-        for name, data, score, _, _ in best_rest:
-            selected_frames.append((name, data, score))
+        for name, data, _score in frames_with_scores:
+            if remaining <= 0:
+                break
+            selected_frames.append((name, data))
+            remaining -= 1
 
-        # Add selected frames to client
+        # Group by camera in image_entities order; within each camera, sort by
+        # capture order (zero-padded frame counter sorts lexically). Burned-in
+        # overlay timestamps let the LLM correlate across cameras; HA-side
+        # request times are unreliable on cameras that serve stale snapshots.
+        camera_name_order = [
+            entity.replace("camera.", "") if include_filename else f"camera{idx}"
+            for idx, entity in enumerate(image_entities)
+        ]
+        groups = {name: [] for name in camera_name_order}
+        for label, data in selected_frames:
+            groups[label.split("-")[0]].append((label, data))
+
+        ordered_frames = []
+        for name in camera_name_order:
+            ordered_frames.extend(sorted(groups[name], key=lambda x: x[0]))
+        selected_frames = ordered_frames
+
         if selected_frames:
-            # Choose keyframe among the selected frames using the last as reference
-            reference_bytes = selected_frames[-1][1]
-            candidate_bytes = [data for _, data, _ in selected_frames]
-            key_idx = await self._select_keyframe_index(
-                reference_bytes, candidate_bytes
-            )
-
-            # Add all frames (resized) and expose only the chosen keyframe
             resized_base64 = []
-            for frame_name, frame_data, _ in selected_frames:
+            labels = []
+            for label, frame_data in selected_frames:
                 resized_image = await self.resize_image(
                     target_width=target_width, image_data=frame_data
                 )
                 resized_base64.append(resized_image)
-                self.client.add_frame(base64_image=resized_image, filename=frame_name)
+                labels.append(label)
+                self.client.add_frame(
+                    base64_image=resized_image, filename=label
+                )
 
             if expose_images:
-                key_name = selected_frames[key_idx][0]
-                key_b64 = resized_base64[key_idx]
-                await self._expose_image(
-                    frame_name=key_name.split("-")[0],
-                    image_data=key_b64,
-                    uid=str(uuid.uuid4())[:8],
-                )
+                self.candidate_frames = [
+                    (label, rb64, label.split("-")[0])
+                    for label, rb64 in zip(labels, resized_base64)
+                ]
 
     async def add_images(
         self, image_entities, image_paths, target_width, include_filename, expose_images
@@ -897,19 +924,18 @@ class MediaProcessor:
                 )
 
             if expose_images and selected_frames:
-                # Expose keyframe if requested
-                reference_bytes = selected_frames[0][0]
-                candidate_bytes = [fd for (fd, _, _) in selected_frames]
-                key_idx = await self._select_keyframe_index(
-                    reference_bytes, candidate_bytes
-                )
-                # selected_frames items are (frame_bytes, score, original_index)
-                frame_idx_label = (selected_frames[key_idx][2] or 0) + 1
-                await self._expose_image(
-                    frame_name=str(frame_idx_label),
-                    image_data=resized_base64[key_idx],
-                    uid=str(uuid.uuid4())[:8],
-                )
+                for idx_enum, (_, _, orig_idx) in enumerate(
+                    selected_frames
+                ):
+                    label = (
+                        f"{os.path.splitext(os.path.basename(video_path))[0]} (frame {idx_enum + 1})"
+                        if include_filename
+                        else f"Video frame {idx_enum + 1}"
+                    )
+                    expose_name = str((orig_idx or 0) + 1)
+                    self.candidate_frames.append(
+                        (label, resized_base64[idx_enum], expose_name)
+                    )
         except Exception as e:
             raise ServiceValidationError(f"Error processing video {video_path}: {e}")
 
@@ -937,8 +963,11 @@ class MediaProcessor:
 
         _LOGGER.debug(f"Processing videos: {video_paths}")
 
-        def process_video(video_path):
-            return self.add_video(
+        # Process videos sequentially to avoid concurrent appends to
+        # candidate_frames (asyncio.gather on coroutines sharing mutable
+        # state is a race condition).
+        for video_path in video_paths:
+            await self.add_video(
                 video_path=video_path,
                 base_url=base_url,
                 max_frames=max_frames,
@@ -946,9 +975,6 @@ class MediaProcessor:
                 include_filename=include_filename,
                 expose_images=expose_images,
             )
-
-        # Process videos in parallel
-        await asyncio.gather(*map(process_video, video_paths))
 
         return self.client
 

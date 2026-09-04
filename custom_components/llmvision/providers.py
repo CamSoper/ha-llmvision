@@ -176,6 +176,37 @@ class Request:
         call.base64_images = self.base64_images
         call.filenames = self.filenames
 
+        # Inject best_frame instruction when llm_pick_keyframe is enabled.
+        # Guard against double-injection on fallback retry.
+        if (
+            getattr(call, "llm_pick_keyframe", False)
+            and call.expose_images
+            and "[BEST_FRAME:" not in call.message
+        ):
+            call.message += (
+                "\n\nEach image is labeled with a frame identifier. "
+                "After your analysis, choose the single frame that best "
+                "represents the event — prefer a frame where the key subject "
+                "(person, animal, package, vehicle, etc.) is most clearly "
+                "visible, rather than an empty scene. "
+                "Append your choice on its own line in this exact format: "
+                "[BEST_FRAME: <frame label>]"
+            )
+            # Inject best_frame into JSON schema if structured output is used
+            if call.response_format == "json" and call.structure:
+                try:
+                    schema = json.loads(call.structure) if isinstance(call.structure, str) else call.structure
+                    if "properties" in schema:
+                        schema["properties"]["best_frame"] = {
+                            "type": "string",
+                            "description": "The exact frame label of the frame that best shows the primary subject"
+                        }
+                        if "required" in schema and isinstance(schema["required"], list):
+                            schema["required"].append("best_frame")
+                        call.structure = json.dumps(schema)
+                except (json.JSONDecodeError, TypeError, KeyError):
+                    pass
+
         self.validate(call)
 
         # Get fallback provider from settings
@@ -1326,6 +1357,22 @@ class Google(Provider):
                 "topP": default_parameters.get("top_p"),
             },
         }
+
+        # Gemini 3.x exposes media_resolution to control per-image token allocation
+        # (low ≈ 256, medium ≈ 560, high ≈ 1120 tokens/image). Opt-in per service
+        # call; unset/unknown values are dropped so Gemini applies its own default.
+        # ULTRA_HIGH is intentionally not exposed: per Google's docs it's only
+        # valid as a per-part override, not a global generationConfig setting.
+        media_resolution = getattr(call, "media_resolution", None)
+        if isinstance(media_resolution, str):
+            normalized = media_resolution.strip().lower()
+            mapping = {
+                "low": "MEDIA_RESOLUTION_LOW",
+                "medium": "MEDIA_RESOLUTION_MEDIUM",
+                "high": "MEDIA_RESOLUTION_HIGH",
+            }
+            if normalized in mapping:
+                payload["generationConfig"]["mediaResolution"] = mapping[normalized]
 
         # Add thinking budget based on current model and config
         if (

@@ -14,6 +14,8 @@ import custom_components.llmvision as init_module
 from custom_components.llmvision import (
     ServiceCallData,
     _create_event,
+    _extract_and_strip_best_frame,
+    _match_best_frame,
     _update_sensor,
     async_migrate_entry,
     async_remove_entry,
@@ -716,3 +718,149 @@ class TestSetupServices:
         hass.http.register_view.assert_any_call(init_module.TimelineEventsView)
         hass.http.register_view.assert_any_call(init_module.TimelineEventView)
         hass.http.register_view.assert_any_call(init_module.TimelineEventCreateView)
+
+
+class TestMatchBestFrame:
+    """Test _match_best_frame helper function."""
+
+    def _make_candidates(self):
+        return [
+            ("camera0-frame-1", "b64data1", "camera0"),
+            ("camera0-frame-2", "b64data2", "camera0"),
+            ("camera0-frame-3", "b64data3", "camera0"),
+        ]
+
+    def test_exact_match(self):
+        """Test exact label match."""
+        assert _match_best_frame("camera0-frame-2", self._make_candidates()) == 1
+
+    def test_partial_match(self):
+        """Test partial matching when exact match fails."""
+        # "camera0-frame-2" is contained in "camera0-frame-2:"
+        assert _match_best_frame("camera0-frame-2:", self._make_candidates()) == 1
+
+    def test_no_match(self):
+        """Test returns None when label doesn't match any candidate."""
+        assert _match_best_frame("nonexistent-99", self._make_candidates()) is None
+
+    def test_empty_candidates(self):
+        """Test returns None with empty candidates list."""
+        assert _match_best_frame("camera0-frame-1", []) is None
+
+    def test_none_label(self):
+        """Test returns None with None label."""
+        assert _match_best_frame(None, self._make_candidates()) is None
+
+    def test_empty_label(self):
+        """Test returns None with empty string label."""
+        assert _match_best_frame("", self._make_candidates()) is None
+
+    def test_zero_padded_label_format(self):
+        """Regression: zero-padded labels (new format) still match exactly,
+        and the partial-match fallback still tolerates trailing punctuation
+        the LLM sometimes appends (e.g. a colon)."""
+        candidates = [
+            ("camera0-frame-05", "b64data1", "camera0"),
+            ("camera0-frame-06", "b64data2", "camera0"),
+            ("camera0-frame-15", "b64data3", "camera0"),
+        ]
+        # Exact match against the new zero-padded label.
+        assert _match_best_frame("camera0-frame-05", candidates) == 0
+        # Partial-match fallback still resolves trailing-punctuation noise.
+        assert _match_best_frame("camera0-frame-15:", candidates) == 2
+
+
+class TestExtractAndStripBestFrame:
+    """Test _extract_and_strip_best_frame function."""
+
+    def _make_candidates(self):
+        return [
+            ("camera0-frame-1", "b64data1", "camera0"),
+            ("camera0-frame-2", "b64data2", "camera0"),
+            ("camera0-frame-3", "b64data3", "camera0"),
+        ]
+
+    def test_extract_from_structured_response(self):
+        """Test best_frame extracted and stripped from structured_response."""
+        response = {
+            "structured_response": {
+                "description": "A person at the door",
+                "best_frame": "camera0-frame-2",
+            }
+        }
+        candidates = self._make_candidates()
+
+        result = _extract_and_strip_best_frame(response, candidates)
+
+        assert result == 1
+        assert "best_frame" not in response["structured_response"]
+        assert response["structured_response"]["description"] == "A person at the door"
+
+    def test_extract_from_bracketed_tag(self):
+        """Test best_frame extracted from [BEST_FRAME: ...] tag in text."""
+        response = {
+            "response_text": "A person was seen.\n[BEST_FRAME: camera0-frame-3]"
+        }
+        candidates = self._make_candidates()
+
+        result = _extract_and_strip_best_frame(response, candidates)
+
+        assert result == 2
+        assert "BEST_FRAME" not in response["response_text"]
+        assert "A person was seen." in response["response_text"]
+
+    def test_strips_tag_from_text(self):
+        """Test that the tag is removed from response_text."""
+        response = {
+            "response_text": "Delivery at the door. [BEST_FRAME: camera0-frame-1]"
+        }
+        candidates = self._make_candidates()
+
+        _extract_and_strip_best_frame(response, candidates)
+
+        assert response["response_text"] == "Delivery at the door."
+
+    def test_no_tag_leaves_text_unchanged(self):
+        """Test response_text is unchanged when no tag is present."""
+        response = {
+            "response_text": "A person was detected at the front door."
+        }
+        candidates = self._make_candidates()
+
+        result = _extract_and_strip_best_frame(response, candidates)
+
+        assert result is None
+        assert response["response_text"] == "A person was detected at the front door."
+
+    def test_returns_none_on_invalid_label(self):
+        """Test returns None when label doesn't match any candidate."""
+        response = {
+            "structured_response": {"best_frame": "nonexistent-frame-99"}
+        }
+        candidates = self._make_candidates()
+
+        result = _extract_and_strip_best_frame(response, candidates)
+
+        assert result is None
+
+    def test_empty_response(self):
+        """Test returns None with empty response dict."""
+        result = _extract_and_strip_best_frame({}, self._make_candidates())
+        assert result is None
+
+    def test_structured_takes_priority_over_text(self):
+        """Test structured_response best_frame is used over text tag."""
+        response = {
+            "structured_response": {
+                "best_frame": "camera0-frame-1",
+            },
+            "response_text": "text [BEST_FRAME: camera0-frame-3]",
+        }
+        candidates = self._make_candidates()
+
+        result = _extract_and_strip_best_frame(response, candidates)
+
+        # Structured wins
+        assert result == 0
+        # But text tag should still be stripped
+        assert "BEST_FRAME" not in response["response_text"]

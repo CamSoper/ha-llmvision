@@ -893,6 +893,14 @@ class TestGoogle:
 
             assert google._model_supports_thinking() is True
 
+    def test_model_supports_thinking_ga_gemini_3x(self, mock_hass):
+        """Test _model_supports_thinking for GA Gemini 3.x models."""
+        with patch("custom_components.llmvision.providers.async_get_clientsession"):
+            for model in ("gemini-3.6-flash", "gemini-3.5-flash-lite"):
+                google = Google(mock_hass, "test_api_key", model)
+
+                assert google._model_supports_thinking() is True
+
     def test_model_does_not_support_thinking(self, mock_hass):
         """Test _model_supports_thinking for older models."""
         with patch("custom_components.llmvision.providers.async_get_clientsession"):
@@ -2694,3 +2702,358 @@ def test_anthropic_unsupported_model_omits_disabled_thinking_parameter(coverage_
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# --- Fork additions: media_resolution + llm_pick_keyframe feature tests ---
+
+
+@pytest.fixture
+def mock_hass_with_session():
+    """Create a mock Home Assistant instance with session."""
+    hass = Mock()
+    hass.data = {}
+    hass.config_entries = Mock()
+    hass.config_entries.async_entries = Mock(return_value=[])
+    hass.loop = Mock()
+    hass.loop.run_in_executor = AsyncMock()
+    hass.config = Mock()
+    hass.config.path = Mock(return_value="/mock/path")
+    return hass
+
+
+class TestGoogleMediaResolution:
+    """Tests for Google media_resolution (opt-in per-image token allocation)."""
+
+    def _make_google_call(self, media_resolution=None):
+        """Build a mock service call for Google._prepare_vision_data tests."""
+        call = Mock()
+        call.max_tokens = 1000
+        call.base64_images = []
+        call.filenames = []
+        call.message = "Describe"
+        call.provider = "test_provider"
+        call.response_format = "text"
+        call.structure = None
+        call.use_memory = False
+        call.media_resolution = media_resolution
+        return call
+
+    def _prepare_google_payload(self, mock_hass, model, call):
+        """Run Google._prepare_vision_data with stable defaults."""
+        mock_hass.data = {
+            DOMAIN: {
+                "test_provider": {
+                    "provider": "Google",
+                    "temperature": 0.5,
+                    "top_p": 0.9,
+                }
+            }
+        }
+        with patch('custom_components.llmvision.providers.async_get_clientsession'):
+            google = Google(mock_hass, "test_api_key", model)
+            with patch.object(google, '_get_system_prompt', return_value="System"):
+                return google._prepare_vision_data(call)
+
+    def test_prepare_vision_data_no_media_resolution(self, mock_hass_with_session):
+        """Unset media_resolution -> no mediaResolution key in generationConfig."""
+        call = self._make_google_call(media_resolution=None)
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-flash", call
+        )
+        assert "mediaResolution" not in result["generationConfig"]
+
+    def test_prepare_vision_data_low(self, mock_hass_with_session):
+        """media_resolution='low' -> MEDIA_RESOLUTION_LOW."""
+        call = self._make_google_call(media_resolution="low")
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-pro", call
+        )
+        assert result["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_LOW"
+
+    def test_prepare_vision_data_medium(self, mock_hass_with_session):
+        """media_resolution='medium' -> MEDIA_RESOLUTION_MEDIUM."""
+        call = self._make_google_call(media_resolution="medium")
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-pro", call
+        )
+        assert result["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_MEDIUM"
+
+    def test_prepare_vision_data_high(self, mock_hass_with_session):
+        """media_resolution='high' -> MEDIA_RESOLUTION_HIGH."""
+        call = self._make_google_call(media_resolution="high")
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-pro", call
+        )
+        assert result["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_HIGH"
+
+    @pytest.mark.parametrize("value", ["LOW", "Low", "low", " low ", "lOw"])
+    def test_prepare_vision_data_case_insensitive(self, mock_hass_with_session, value):
+        """media_resolution is case-insensitive."""
+        call = self._make_google_call(media_resolution=value)
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-pro", call
+        )
+        assert result["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_LOW"
+
+    def test_prepare_vision_data_garbage_value(self, mock_hass_with_session):
+        """Unknown values are silently dropped."""
+        call = self._make_google_call(media_resolution="garbage")
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-pro", call
+        )
+        assert "mediaResolution" not in result["generationConfig"]
+
+    def test_prepare_vision_data_ultra_high_not_exposed(self, mock_hass_with_session):
+        """ULTRA_HIGH is not exposed as a global setting and is dropped."""
+        call = self._make_google_call(media_resolution="ultra_high")
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-pro", call
+        )
+        assert "mediaResolution" not in result["generationConfig"]
+
+    def test_prepare_vision_data_gemini_3_flash_default_unchanged(
+        self, mock_hass_with_session
+    ):
+        """Previous gemini-3-flash hardcoded default is gone: no media_resolution -> no key."""
+        call = self._make_google_call(media_resolution=None)
+        result = self._prepare_google_payload(
+            mock_hass_with_session, "gemini-3-flash-latest", call
+        )
+        assert "mediaResolution" not in result["generationConfig"]
+
+
+class TestLlmPickKeyframeInjection:
+    """Test prompt and schema injection for llm_pick_keyframe."""
+
+    @pytest.fixture
+    def mock_hass_with_session(self):
+        """Create a mock Home Assistant instance with session."""
+        hass = Mock()
+        hass.data = {}
+        hass.config_entries = Mock()
+        hass.config_entries.async_entries = Mock(return_value=[])
+        hass.loop = Mock()
+        hass.loop.run_in_executor = AsyncMock()
+        hass.config = Mock()
+        hass.config.path = Mock(return_value="/mock/path")
+        return hass
+
+    @pytest.mark.asyncio
+    async def test_prompt_injection_when_enabled(self, mock_hass_with_session):
+        """Test that BEST_FRAME instruction is appended to message."""
+        mock_hass_with_session.data = {
+            DOMAIN: {
+                "test_provider": {
+                    "provider": "OpenAI",
+                    "api_key": "test_key",
+                    "temperature": 0.5,
+                    "top_p": 0.9,
+                }
+            }
+        }
+
+        with patch('custom_components.llmvision.providers.async_get_clientsession'):
+            request = Request(mock_hass_with_session, "Describe the scene", 1000, 0.5)
+            request.base64_images = ["img1"]
+            request.filenames = ["camera0-frame-1"]
+
+            call = Mock()
+            call.provider = "test_provider"
+            call.model = "gpt-4"
+            call.message = "Describe the scene"
+            call.llm_pick_keyframe = True
+            call.expose_images = True
+            call.response_format = "text"
+            call.structure = None
+            call.base64_images = ["img1"]
+            call.filenames = ["camera0-frame-1"]
+            call.generate_title = False
+            call.use_memory = False
+
+            mock_provider = Mock()
+            mock_provider.vision_request = AsyncMock(
+                return_value="A person at the door.\n[BEST_FRAME: camera0-frame-1]"
+            )
+            mock_provider.supports_structured_output = Mock(return_value=False)
+
+            with patch(
+                'custom_components.llmvision.providers.ProviderFactory.create',
+                return_value=mock_provider
+            ):
+                result = await request.call(call)
+
+            assert "[BEST_FRAME:" in call.message
+
+    @pytest.mark.asyncio
+    async def test_no_injection_when_disabled(self, mock_hass_with_session):
+        """Test that message is NOT modified when llm_pick_keyframe is False."""
+        mock_hass_with_session.data = {
+            DOMAIN: {
+                "test_provider": {
+                    "provider": "OpenAI",
+                    "api_key": "test_key",
+                    "temperature": 0.5,
+                    "top_p": 0.9,
+                }
+            }
+        }
+
+        with patch('custom_components.llmvision.providers.async_get_clientsession'):
+            request = Request(mock_hass_with_session, "Describe the scene", 1000, 0.5)
+            request.base64_images = ["img1"]
+            request.filenames = ["camera0-frame-1"]
+
+            call = Mock()
+            call.provider = "test_provider"
+            call.model = "gpt-4"
+            call.message = "Describe the scene"
+            call.llm_pick_keyframe = False
+            call.expose_images = True
+            call.response_format = "text"
+            call.structure = None
+            call.base64_images = ["img1"]
+            call.filenames = ["camera0-frame-1"]
+            call.generate_title = False
+            call.use_memory = False
+
+            mock_provider = Mock()
+            mock_provider.vision_request = AsyncMock(return_value="A person at the door.")
+            mock_provider.supports_structured_output = Mock(return_value=False)
+
+            with patch(
+                'custom_components.llmvision.providers.ProviderFactory.create',
+                return_value=mock_provider
+            ):
+                result = await request.call(call)
+
+            assert "[BEST_FRAME:" not in call.message
+
+    @pytest.mark.asyncio
+    async def test_no_double_injection_on_retry(self, mock_hass_with_session):
+        """Test that prompt is not appended twice on fallback retry."""
+        mock_hass_with_session.data = {
+            DOMAIN: {
+                "test_provider": {
+                    "provider": "OpenAI",
+                    "api_key": "test_key",
+                    "temperature": 0.5,
+                    "top_p": 0.9,
+                },
+                "fallback_provider": {
+                    "provider": "Anthropic",
+                    "api_key": "test_key",
+                    "temperature": 0.5,
+                    "top_p": 0.9,
+                },
+            }
+        }
+
+        settings_entry = Mock()
+        settings_entry.data = {
+            "provider": "Settings",
+            "fallback_provider": "fallback_provider",
+        }
+        mock_hass_with_session.config_entries.async_entries = Mock(
+            return_value=[settings_entry]
+        )
+
+        with patch('custom_components.llmvision.providers.async_get_clientsession'):
+            request = Request(mock_hass_with_session, "Describe", 1000, 0.5)
+            request.base64_images = ["img1"]
+            request.filenames = ["cam-frame-1"]
+
+            call = Mock()
+            call.provider = "test_provider"
+            call.model = "gpt-4"
+            call.message = "Describe"
+            call.llm_pick_keyframe = True
+            call.expose_images = True
+            call.response_format = "text"
+            call.structure = None
+            call.base64_images = ["img1"]
+            call.filenames = ["cam-frame-1"]
+            call.generate_title = False
+            call.use_memory = False
+
+            # First provider fails, fallback succeeds
+            fail_provider = Mock()
+            fail_provider.vision_request = AsyncMock(side_effect=Exception("fail"))
+
+            ok_provider = Mock()
+            ok_provider.vision_request = AsyncMock(
+                return_value="OK\n[BEST_FRAME: cam-frame-1]"
+            )
+            ok_provider.supports_structured_output = Mock(return_value=False)
+
+            call_count = [0]
+            def create_provider(**kwargs):
+                call_count[0] += 1
+                return fail_provider if call_count[0] == 1 else ok_provider
+
+            with patch(
+                'custom_components.llmvision.providers.ProviderFactory.create',
+                side_effect=create_provider,
+            ):
+                await request.call(call)
+
+            # The tag should appear exactly once
+            assert call.message.count("[BEST_FRAME:") == 1
+
+    @pytest.mark.asyncio
+    async def test_schema_injection_with_structured_output(self, mock_hass_with_session):
+        """Test that best_frame is injected into JSON schema."""
+        mock_hass_with_session.data = {
+            DOMAIN: {
+                "test_provider": {
+                    "provider": "OpenAI",
+                    "api_key": "test_key",
+                    "temperature": 0.5,
+                    "top_p": 0.9,
+                }
+            }
+        }
+
+        original_schema = json.dumps({
+            "type": "object",
+            "properties": {
+                "description": {"type": "string"}
+            },
+            "required": ["description"],
+            "additionalProperties": False,
+        })
+
+        with patch('custom_components.llmvision.providers.async_get_clientsession'):
+            request = Request(mock_hass_with_session, "Describe the scene", 1000, 0.5)
+            request.base64_images = ["img1"]
+            request.filenames = ["camera0-frame-1"]
+
+            call = Mock()
+            call.provider = "test_provider"
+            call.model = "gpt-4"
+            call.message = "Describe the scene"
+            call.llm_pick_keyframe = True
+            call.expose_images = True
+            call.response_format = "json"
+            call.structure = original_schema
+            call.base64_images = ["img1"]
+            call.filenames = ["camera0-frame-1"]
+            call.generate_title = False
+            call.title_field = ""
+            call.use_memory = False
+
+            mock_provider = Mock()
+            mock_provider.vision_request = AsyncMock(
+                return_value='{"description": "test", "best_frame": "camera0-frame-1"}'
+            )
+            mock_provider.supports_structured_output = Mock(return_value=True)
+
+            with patch(
+                'custom_components.llmvision.providers.ProviderFactory.create',
+                return_value=mock_provider
+            ):
+                result = await request.call(call)
+
+            # Verify schema was modified
+            modified_schema = json.loads(call.structure)
+            assert "best_frame" in modified_schema["properties"]
+            assert "best_frame" in modified_schema["required"]
