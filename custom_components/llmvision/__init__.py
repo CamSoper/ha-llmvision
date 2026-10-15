@@ -3,7 +3,7 @@ from .timeline import Timeline
 from .providers import Request
 from .memory import Memory
 from .media_handlers import MediaProcessor
-import os, re
+import asyncio, copy, json, os, re
 from datetime import timedelta
 from homeassistant.util import dt as dt_util
 from homeassistant.config_entries import ConfigEntry
@@ -81,6 +81,17 @@ from .const import (
     CONF_THINKING_BUDGET,
     CONF_THINK,
     CONF_REASONING_EFFORT,
+    PRESCREEN_MODEL,
+    PRESCREEN_PROVIDER,
+    PRESCREEN_FRAMES,
+    PRESCREEN_TARGET_WIDTH,
+    PRESCREEN_MESSAGE,
+    PRESCREEN_MAX_TOKENS,
+    PRESCREEN_FAIL_OPEN,
+    PRESCREEN_ENFORCE,
+    PRESCREEN_TIMEOUT,
+    PRESCREEN_STRUCTURE,
+    DEFAULT_PRESCREEN_PROMPT,
 )
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -489,6 +500,24 @@ class ServiceCallData:
         self.media_resolution: str | None = data_call.data.get(MEDIA_RESOLUTION)
         self.memory: Memory | None = None
 
+        # ------------ Pre-screen (stream_analyzer only) ------------
+        # Off unless prescreen_model is set.
+        self.prescreen_model: str | None = data_call.data.get(PRESCREEN_MODEL)
+        self.prescreen_provider: str | None = data_call.data.get(PRESCREEN_PROVIDER)
+        self.prescreen_frames: int = int(data_call.data.get(PRESCREEN_FRAMES, 4))
+        self.prescreen_target_width: int = int(
+            data_call.data.get(PRESCREEN_TARGET_WIDTH, 512)
+        )
+        self.prescreen_message: str = str(
+            data_call.data.get(PRESCREEN_MESSAGE) or DEFAULT_PRESCREEN_PROMPT
+        )
+        self.prescreen_max_tokens: int = int(
+            data_call.data.get(PRESCREEN_MAX_TOKENS, 1024)
+        )
+        self.prescreen_fail_open: bool = data_call.data.get(PRESCREEN_FAIL_OPEN, True)
+        # Shadow mode by default: the verdict is reported, but the main call still runs.
+        self.prescreen_enforce: bool = data_call.data.get(PRESCREEN_ENFORCE, False)
+
         # ------------ Create Event ------------
         self.title: str = data_call.data.get("title")
         self.description: str = data_call.data.get("description")
@@ -621,6 +650,114 @@ async def _resolve_llm_keyframe(processor, call, response):
             "falling back to SSIM-based selection"
         )
         await processor.select_and_expose_keyframe()
+
+
+def _parse_prescreen_response(response: dict) -> dict:
+    """Pull the pre-screen verdict out of a Request.call response.
+
+    Raises ValueError if the response doesn't match the schema.
+    """
+    verdict = response.get("structured_response")
+    if not isinstance(verdict, dict):
+        text = str(response.get("response_text", "")).strip()
+        # Tolerate ```json fences from providers without structured output
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
+        verdict = json.loads(text)
+    if not isinstance(verdict, dict):
+        raise ValueError(f"Pre-screen response is not an object: {verdict!r}")
+
+    worth_analyzing = verdict.get("worth_analyzing")
+    if not isinstance(worth_analyzing, bool):
+        raise ValueError(f"Pre-screen worth_analyzing is not a boolean: {verdict!r}")
+    confidence = str(verdict.get("confidence", "")).strip().lower()
+    if confidence not in ("low", "medium", "high"):
+        raise ValueError(f"Pre-screen confidence is invalid: {verdict!r}")
+    subjects = verdict.get("subjects") or []
+    if not isinstance(subjects, list):
+        subjects = [str(subjects)]
+
+    return {
+        "worth_analyzing": worth_analyzing,
+        "subjects": [str(x) for x in subjects],
+        "confidence": confidence,
+        "reason": str(verdict.get("reason", "")),
+    }
+
+
+async def _run_prescreen(hass, call: ServiceCallData, processor) -> dict:
+    """Ask a cheap model whether the stream is worth the main call.
+
+    Returns a verdict dict. ``passed`` is True when the main call should run:
+    the screen saw something, wasn't confident, or failed (with fail-open on).
+    """
+    verdict = {
+        "ran": True,
+        "passed": True,
+        "enforced": bool(call.prescreen_enforce),
+        "model": call.prescreen_model,
+        "frames": [label for label, _ in processor.prescreen_frames],
+    }
+
+    try:
+        if not processor.prescreen_frames:
+            raise ValueError("No frames captured for the pre-screen")
+
+        request = Request(
+            hass,
+            message=call.prescreen_message,
+            max_tokens=call.prescreen_max_tokens,
+            temperature=call.temperature,
+        )
+        for label, b64 in processor.prescreen_frames:
+            request.add_frame(base64_image=b64, filename=label)
+
+        # Shallow copy so Request.call's mutations (model, provider on fallback,
+        # message) never leak into the main call.
+        screen_call = copy.copy(call)
+        screen_call.provider = call.prescreen_provider or call.provider
+        screen_call.model = call.prescreen_model
+        # Spell out the shape for providers without native structured output
+        screen_call.message = (
+            call.prescreen_message
+            + "\n\nRespond only with JSON matching this schema: "
+            + json.dumps(PRESCREEN_STRUCTURE)
+        )
+        screen_call.max_tokens = call.prescreen_max_tokens
+        screen_call.response_format = "json"
+        screen_call.structure = json.dumps(PRESCREEN_STRUCTURE)
+        screen_call.title_field = ""
+        screen_call.description_field = ""
+        screen_call.generate_title = False
+        screen_call.use_memory = False
+        screen_call.llm_pick_keyframe = False
+        screen_call.expose_images = False
+        screen_call.store_in_timeline = False
+        screen_call.media_resolution = "low"
+
+        response = await asyncio.wait_for(
+            request.call(screen_call), timeout=PRESCREEN_TIMEOUT
+        )
+        parsed = _parse_prescreen_response(response)
+    except Exception as e:  # noqa: BLE001 - any screen failure is handled the same way
+        error = str(e).strip() or e.__class__.__name__
+        if not call.prescreen_fail_open:
+            raise ServiceValidationError(f"Pre-screen failed: {error}") from e
+        _LOGGER.warning("Pre-screen failed, running the main call anyway: %s", error)
+        verdict["error"] = error
+        return verdict
+
+    verdict.update(parsed)
+    # Ties go to analysis: a low-confidence "no" still runs the main call.
+    verdict["passed"] = parsed["worth_analyzing"] or parsed["confidence"] == "low"
+    _LOGGER.info(
+        "Pre-screen %s (%s, %s confidence, enforced=%s): %s",
+        "passed" if verdict["passed"] else "rejected",
+        ", ".join(parsed["subjects"]) or "no subjects",
+        parsed["confidence"],
+        verdict["enforced"],
+        parsed["reason"],
+    )
+    return verdict
 
 
 async def _create_event(
@@ -854,7 +991,16 @@ def setup(hass, config):
             target_width=call.target_width,
             include_filename=call.include_filename,
             expose_images=call.expose_images,
+            prescreen_frames=call.prescreen_frames if call.prescreen_model else 0,
+            prescreen_target_width=call.prescreen_target_width,
         )
+
+        # Runs before any keyframe is exposed, so a skipped run leaves nothing behind.
+        prescreen = None
+        if call.prescreen_model:
+            prescreen = await _run_prescreen(hass, call, processor)
+            if not prescreen["passed"] and call.prescreen_enforce:
+                return {"prescreen": prescreen, "skipped": True}
 
         if call.expose_images and not call.llm_pick_keyframe:
             await processor.select_and_expose_keyframe()
@@ -864,6 +1010,9 @@ def setup(hass, config):
 
         response = await request.call(call)
         await _resolve_llm_keyframe(processor, call, response)
+        if prescreen is not None:
+            response["prescreen"] = prescreen
+            response["skipped"] = False
 
         if processor.key_frame:
             response["key_frame"] = processor.key_frame
