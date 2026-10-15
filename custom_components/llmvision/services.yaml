@@ -440,6 +440,71 @@ stream_analyzer:
             - "low"
             - "medium"
             - "high"
+    prescreen_model:
+      name: Pre-screen Model
+      required: false
+      description: "Cheap model that looks at the most-changed frames first and decides whether the main call is worth making (e.g. gemini-3.5-flash-lite). Leave empty to turn the pre-screen off."
+      example: "gemini-3.5-flash-lite"
+      selector:
+        text:
+          multiline: false
+    prescreen_provider:
+      name: Pre-screen Provider
+      required: false
+      description: "Configuration to use for the pre-screen. Defaults to the main provider."
+      selector:
+        config_entry:
+          integration: llmvision
+    prescreen_frames:
+      name: Pre-screen Frames
+      required: false
+      description: "How many of the most-changed frames to send to the pre-screen. The first frame per camera is left out."
+      example: 4
+      default: 4
+      selector:
+        number:
+          min: 1
+          max: 10
+          step: 1
+    prescreen_target_width:
+      name: Pre-screen Target Width
+      required: false
+      description: "Width in pixels of the pre-screen frames. Media resolution is always 'low' for the pre-screen."
+      example: 512
+      default: 512
+      selector:
+        number:
+          min: 256
+          max: 1920
+    prescreen_message:
+      name: Pre-screen Prompt
+      required: false
+      description: "Question for the pre-screen. Leave empty for the built-in prompt (people, vehicles, animals, packages, or equipment that moved or appeared)."
+      selector:
+        text:
+          multiline: true
+    prescreen_max_tokens:
+      name: Pre-screen Maximum Tokens
+      required: false
+      description: "Token ceiling for the pre-screen answer, including any thinking tokens."
+      example: 1024
+      default: 1024
+      selector:
+        number:
+    prescreen_fail_open:
+      name: Pre-screen Fails Open
+      required: false
+      description: "If the pre-screen errors, times out, or returns bad JSON, run the main call anyway. Turn off to fail the whole action instead."
+      default: true
+      selector:
+        boolean:
+    prescreen_enforce:
+      name: Enforce Pre-screen
+      required: false
+      description: "When on, a 'nothing here' verdict skips the main call and returns skipped: true. When off (shadow mode), the verdict is only reported in the response and the main call always runs."
+      default: false
+      selector:
+        boolean:
     response_format:
       name: Response Format
       description: Format of the response - text for natural language or json for structured data

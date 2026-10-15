@@ -37,6 +37,7 @@ class MediaProcessor:
         self.snapshots_path = f"/media/{DOMAIN}/snapshots/"
         self.key_frame = ""
         self.candidate_frames = []  # [(label, base64_data, expose_name)]
+        self.prescreen_frames = []  # [(label, base64_data)] small copies for the pre-screen
 
     async def _encode_image(self, img):
         """Encode image as base64"""
@@ -295,6 +296,8 @@ class MediaProcessor:
         target_width,
         include_filename,
         expose_images,
+        prescreen_frames=0,
+        prescreen_target_width=512,
     ):
         """Wrapper for client.add_frame with integrated recorder
 
@@ -302,6 +305,9 @@ class MediaProcessor:
             image_entities (list[string]): List of camera entities to record
             duration (float): Duration in seconds to record
             target_width (int): Target width for the images in pixels
+            prescreen_frames (int): How many of the most-changed frames to keep,
+                downscaled, in self.prescreen_frames (0 = none)
+            prescreen_target_width (int): Width of the pre-screen copies
         """
 
         if duration is None or duration < 3:
@@ -480,6 +486,15 @@ class MediaProcessor:
         # Rank by SSIM (most-different first) so selection picks high-motion frames.
         frames_with_scores.sort(key=lambda x: x[2])
 
+        if prescreen_frames > 0:
+            await self._stash_prescreen_frames(
+                frames_with_scores,
+                first_frames,
+                image_entities,
+                prescreen_frames,
+                prescreen_target_width,
+            )
+
         selected_frames = []
         remaining = max(0, max_frames)
 
@@ -532,6 +547,25 @@ class MediaProcessor:
                     (label, rb64, label.split("-")[0])
                     for label, rb64 in zip(labels, resized_base64)
                 ]
+
+    async def _stash_prescreen_frames(
+        self, frames_with_scores, first_frames, image_entities, count, target_width
+    ):
+        """Keep small copies of the most-changed frames for the pre-screen.
+
+        First frames are the "before" shot, so they're only used when nothing
+        else was captured. Frames go out in capture order.
+        """
+        picked = [(name, data) for name, data, _score in frames_with_scores[:count]]
+        if not picked:
+            picked = [first_frames[e] for e in image_entities if e in first_frames]
+        picked.sort(key=lambda x: x[0])
+        self.prescreen_frames = []
+        for label, frame_data in picked:
+            resized = await self.resize_image(
+                target_width=target_width, image_data=frame_data
+            )
+            self.prescreen_frames.append((label, resized))
 
     async def add_images(
         self, image_entities, image_paths, target_width, include_filename, expose_images
@@ -986,6 +1020,8 @@ class MediaProcessor:
         target_width,
         include_filename,
         expose_images,
+        prescreen_frames=0,
+        prescreen_target_width=512,
     ):
         if image_entities:
             await self.record(
@@ -995,6 +1031,8 @@ class MediaProcessor:
                 target_width=target_width,
                 include_filename=include_filename,
                 expose_images=expose_images,
+                prescreen_frames=prescreen_frames,
+                prescreen_target_width=prescreen_target_width,
             )
         return self.client
 

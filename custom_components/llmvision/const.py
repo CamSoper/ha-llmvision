@@ -82,6 +82,17 @@ SENSOR_ENTITY = "sensor_entity"
 LLM_PICK_KEYFRAME = "llm_pick_keyframe"
 MEDIA_RESOLUTION = "media_resolution"
 
+# Pre-screen (stream_analyzer): a cheap model decides whether the main call is worth making
+PRESCREEN_MODEL = "prescreen_model"
+PRESCREEN_PROVIDER = "prescreen_provider"
+PRESCREEN_FRAMES = "prescreen_frames"
+PRESCREEN_TARGET_WIDTH = "prescreen_target_width"
+PRESCREEN_MESSAGE = "prescreen_message"
+PRESCREEN_MAX_TOKENS = "prescreen_max_tokens"
+PRESCREEN_FAIL_OPEN = "prescreen_fail_open"
+PRESCREEN_ENFORCE = "prescreen_enforce"
+PRESCREEN_TIMEOUT = 30  # seconds; a slower screen fails open (or raises)
+
 # Error messages
 ERROR_NOT_CONFIGURED = "{provider} is not configured"
 ERROR_GROQ_MULTIPLE_IMAGES = "Groq does not support videos or streams"
@@ -136,6 +147,27 @@ Description Rules:
 
 Do not mention camera angle, lighting quality, or image clarity.
 """
+DEFAULT_PRESCREEN_PROMPT = (
+    "These are the most-changed frames from a short live camera capture. "
+    "Is there a person, vehicle, animal, package, or operating equipment that is "
+    "moving or newly present? Ignore swaying plants, shadows, lighting changes, "
+    "rain, insects, and parked cars that never move. Set worth_analyzing to true "
+    "if something like that is there. Use confidence 'low' if you can't tell."
+)
+PRESCREEN_STRUCTURE = {
+    "type": "object",
+    "properties": {
+        "worth_analyzing": {"type": "boolean"},
+        "subjects": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "e.g. person, vehicle, animal, package, equipment",
+        },
+        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+        "reason": {"type": "string", "description": "One short sentence"},
+    },
+    "required": ["worth_analyzing", "subjects", "confidence", "reason"],
+}
 # Models
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5"
