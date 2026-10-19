@@ -297,7 +297,7 @@ class MediaProcessor:
         include_filename,
         expose_images,
         prescreen_frames=0,
-        prescreen_target_width=512,
+        prescreen_target_width=1024,
     ):
         """Wrapper for client.add_frame with integrated recorder
 
@@ -1021,7 +1021,7 @@ class MediaProcessor:
         include_filename,
         expose_images,
         prescreen_frames=0,
-        prescreen_target_width=512,
+        prescreen_target_width=1024,
     ):
         if image_entities:
             await self.record(

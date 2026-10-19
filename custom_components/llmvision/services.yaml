@@ -469,13 +469,25 @@ stream_analyzer:
     prescreen_target_width:
       name: Pre-screen Target Width
       required: false
-      description: "Width in pixels of the pre-screen frames. Media resolution is always 'low' for the pre-screen."
-      example: 512
-      default: 512
+      description: "Width in pixels of the pre-screen frames."
+      example: 1024
+      default: 1024
       selector:
         number:
           min: 256
           max: 1920
+    prescreen_media_resolution:
+      name: Pre-screen Media Resolution
+      required: false
+      description: "Gemini 3.x only. How many tokens each pre-screen frame gets. 'low' is cheapest but can miss small or distant movement."
+      example: "medium"
+      default: "medium"
+      selector:
+        select:
+          options:
+            - "low"
+            - "medium"
+            - "high"
     prescreen_message:
       name: Pre-screen Prompt
       required: false

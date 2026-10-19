@@ -87,6 +87,7 @@ PRESCREEN_MODEL = "prescreen_model"
 PRESCREEN_PROVIDER = "prescreen_provider"
 PRESCREEN_FRAMES = "prescreen_frames"
 PRESCREEN_TARGET_WIDTH = "prescreen_target_width"
+PRESCREEN_MEDIA_RESOLUTION = "prescreen_media_resolution"
 PRESCREEN_MESSAGE = "prescreen_message"
 PRESCREEN_MAX_TOKENS = "prescreen_max_tokens"
 PRESCREEN_FAIL_OPEN = "prescreen_fail_open"
@@ -150,9 +151,13 @@ Do not mention camera angle, lighting quality, or image clarity.
 DEFAULT_PRESCREEN_PROMPT = (
     "These are the most-changed frames from a short live camera capture. "
     "Is there a person, vehicle, animal, package, or operating equipment that is "
-    "moving or newly present? Ignore swaying plants, shadows, lighting changes, "
-    "rain, insects, and parked cars that never move. Set worth_analyzing to true "
-    "if something like that is there. Use confidence 'low' if you can't tell."
+    "moving or newly present? A car pulling in, backing out, or turning counts, "
+    "even if it looks parked in some frames. So does a person anywhere in view, "
+    "even if small or standing still. Ignore swaying plants, shadows, lighting "
+    "changes, rain, insects, and parked cars that are in the same spot in every "
+    "frame. Set worth_analyzing to true if something like that is there. Missing "
+    "a real event is worse than a false alarm, so if you're unsure, set "
+    "worth_analyzing to true and confidence to 'low'."
 )
 PRESCREEN_STRUCTURE = {
     "type": "object",
