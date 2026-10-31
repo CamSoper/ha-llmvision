@@ -85,6 +85,7 @@ from .const import (
     PRESCREEN_PROVIDER,
     PRESCREEN_FRAMES,
     PRESCREEN_TARGET_WIDTH,
+    PRESCREEN_MEDIA_RESOLUTION,
     PRESCREEN_MESSAGE,
     PRESCREEN_MAX_TOKENS,
     PRESCREEN_FAIL_OPEN,
@@ -506,7 +507,11 @@ class ServiceCallData:
         self.prescreen_provider: str | None = data_call.data.get(PRESCREEN_PROVIDER)
         self.prescreen_frames: int = int(data_call.data.get(PRESCREEN_FRAMES, 4))
         self.prescreen_target_width: int = int(
-            data_call.data.get(PRESCREEN_TARGET_WIDTH, 512)
+            data_call.data.get(PRESCREEN_TARGET_WIDTH, 1024)
+        )
+        # "low" was too coarse to see a car moving in a wide driveway shot
+        self.prescreen_media_resolution: str = data_call.data.get(
+            PRESCREEN_MEDIA_RESOLUTION, "medium"
         )
         self.prescreen_message: str = str(
             data_call.data.get(PRESCREEN_MESSAGE) or DEFAULT_PRESCREEN_PROMPT
@@ -732,7 +737,7 @@ async def _run_prescreen(hass, call: ServiceCallData, processor) -> dict:
         screen_call.llm_pick_keyframe = False
         screen_call.expose_images = False
         screen_call.store_in_timeline = False
-        screen_call.media_resolution = "low"
+        screen_call.media_resolution = call.prescreen_media_resolution
 
         response = await asyncio.wait_for(
             request.call(screen_call), timeout=PRESCREEN_TIMEOUT

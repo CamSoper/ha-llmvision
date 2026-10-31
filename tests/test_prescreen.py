@@ -53,7 +53,8 @@ class TestServiceCallDataPrescreen:
         assert call.prescreen_model is None
         assert call.prescreen_provider is None
         assert call.prescreen_frames == 4
-        assert call.prescreen_target_width == 512
+        assert call.prescreen_target_width == 1024
+        assert call.prescreen_media_resolution == "medium"
         assert call.prescreen_message == DEFAULT_PRESCREEN_PROMPT
         assert call.prescreen_max_tokens == 1024
         assert call.prescreen_fail_open is True
@@ -65,6 +66,7 @@ class TestServiceCallDataPrescreen:
             prescreen_provider="other",
             prescreen_frames=2,
             prescreen_target_width=384,
+            prescreen_media_resolution="low",
             prescreen_message="anything?",
             prescreen_max_tokens=300,
             prescreen_fail_open=False,
@@ -74,6 +76,7 @@ class TestServiceCallDataPrescreen:
         assert call.prescreen_provider == "other"
         assert call.prescreen_frames == 2
         assert call.prescreen_target_width == 384
+        assert call.prescreen_media_resolution == "low"
         assert call.prescreen_message == "anything?"
         assert call.prescreen_max_tokens == 300
         assert call.prescreen_fail_open is False
@@ -161,7 +164,7 @@ class TestRunPrescreen:
         assert screen_call.generate_title is False
         assert screen_call.store_in_timeline is False
         assert screen_call.title_field == ""
-        assert screen_call.media_resolution == "low"
+        assert screen_call.media_resolution == "medium"
 
         # The main call is untouched
         assert call.model == "test-model"
