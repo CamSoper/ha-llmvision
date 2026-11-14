@@ -102,13 +102,25 @@ image_analyzer:
     media_resolution:
       name: Media Resolution
       required: false
-      description: "Token allocation per image (Gemini 3.x only; ignored by other providers). 'low' ≈ 256 tokens/image, 'medium' ≈ 560, 'high' ≈ 1120. Lower saves token spend; higher preserves fine detail like small text."
+      description: "Token allocation per image (Gemini 3.x and 4.x only; ignored by other providers). 'low' ≈ 256 tokens/image, 'medium' ≈ 560, 'high' ≈ 1120. Lower saves token spend; higher preserves fine detail like small text."
       selector:
         select:
           options:
             - "low"
             - "medium"
             - "high"
+    thinking_level:
+      name: Thinking Level
+      required: false
+      description: "How hard Gemini 3.x/4.x thinks before answering. Overrides the provider's thinking budget for this call. Thinking tokens are billed as output, so lower is cheaper and faster. Gemini 4 can't turn thinking off ('low' is its floor) and rejects 'minimal'. Leave empty for the model's default (high on Gemini 4)."
+      selector:
+        select:
+          options:
+            - "minimal"
+            - "low"
+            - "medium"
+            - "high"
+            - "xhigh"
     response_format:
       name: Response Format
       description: Format of the response - text for natural language or json for structured data
@@ -266,13 +278,25 @@ video_analyzer:
     media_resolution:
       name: Media Resolution
       required: false
-      description: "Token allocation per image (Gemini 3.x only; ignored by other providers). 'low' ≈ 256 tokens/image, 'medium' ≈ 560, 'high' ≈ 1120. Lower saves token spend; higher preserves fine detail like small text."
+      description: "Token allocation per image (Gemini 3.x and 4.x only; ignored by other providers). 'low' ≈ 256 tokens/image, 'medium' ≈ 560, 'high' ≈ 1120. Lower saves token spend; higher preserves fine detail like small text."
       selector:
         select:
           options:
             - "low"
             - "medium"
             - "high"
+    thinking_level:
+      name: Thinking Level
+      required: false
+      description: "How hard Gemini 3.x/4.x thinks before answering. Overrides the provider's thinking budget for this call. Thinking tokens are billed as output, so lower is cheaper and faster. Gemini 4 can't turn thinking off ('low' is its floor) and rejects 'minimal'. Leave empty for the model's default (high on Gemini 4)."
+      selector:
+        select:
+          options:
+            - "minimal"
+            - "low"
+            - "medium"
+            - "high"
+            - "xhigh"
     response_format:
       name: Response Format
       description: Format of the response - text for natural language or json for structured data
@@ -433,13 +457,25 @@ stream_analyzer:
     media_resolution:
       name: Media Resolution
       required: false
-      description: "Token allocation per image (Gemini 3.x only; ignored by other providers). 'low' ≈ 256 tokens/image, 'medium' ≈ 560, 'high' ≈ 1120. Lower saves token spend; higher preserves fine detail like small text."
+      description: "Token allocation per image (Gemini 3.x and 4.x only; ignored by other providers). 'low' ≈ 256 tokens/image, 'medium' ≈ 560, 'high' ≈ 1120. Lower saves token spend; higher preserves fine detail like small text."
       selector:
         select:
           options:
             - "low"
             - "medium"
             - "high"
+    thinking_level:
+      name: Thinking Level
+      required: false
+      description: "How hard Gemini 3.x/4.x thinks before answering. Overrides the provider's thinking budget for this call. Thinking tokens are billed as output, so lower is cheaper and faster. Gemini 4 can't turn thinking off ('low' is its floor) and rejects 'minimal'. Leave empty for the model's default (high on Gemini 4)."
+      selector:
+        select:
+          options:
+            - "minimal"
+            - "low"
+            - "medium"
+            - "high"
+            - "xhigh"
     prescreen_model:
       name: Pre-screen Model
       required: false
@@ -667,13 +703,25 @@ data_analyzer:
     media_resolution:
       name: Media Resolution
       required: false
-      description: "Token allocation per image (Gemini 3.x only; ignored by other providers). 'low' ≈ 256 tokens/image, 'medium' ≈ 560, 'high' ≈ 1120. Lower saves token spend; higher preserves fine detail like small text."
+      description: "Token allocation per image (Gemini 3.x and 4.x only; ignored by other providers). 'low' ≈ 256 tokens/image, 'medium' ≈ 560, 'high' ≈ 1120. Lower saves token spend; higher preserves fine detail like small text."
       selector:
         select:
           options:
             - "low"
             - "medium"
             - "high"
+    thinking_level:
+      name: Thinking Level
+      required: false
+      description: "How hard Gemini 3.x/4.x thinks before answering. Overrides the provider's thinking budget for this call. Thinking tokens are billed as output, so lower is cheaper and faster. Gemini 4 can't turn thinking off ('low' is its floor) and rejects 'minimal'. Leave empty for the model's default (high on Gemini 4)."
+      selector:
+        select:
+          options:
+            - "minimal"
+            - "low"
+            - "medium"
+            - "high"
+            - "xhigh"
 
 create_event:
   name: Create Event

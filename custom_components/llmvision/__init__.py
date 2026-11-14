@@ -59,6 +59,7 @@ from .const import (
     GENERATE_TITLE,
     SENSOR_ENTITY,
     MEDIA_RESOLUTION,
+    THINKING_LEVEL,
     DATA_EXTRACTION_PROMPT,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_ANTHROPIC_MODEL,
@@ -499,6 +500,7 @@ class ServiceCallData:
         self.title_field: str = data_call.data.get(TITLE_FIELD, "")
         self.description_field: str = data_call.data.get(DESCRIPTION_FIELD, "")
         self.media_resolution: str | None = data_call.data.get(MEDIA_RESOLUTION)
+        self.thinking_level: str | None = data_call.data.get(THINKING_LEVEL)
         self.memory: Memory | None = None
 
         # ------------ Pre-screen (stream_analyzer only) ------------
@@ -738,6 +740,8 @@ async def _run_prescreen(hass, call: ServiceCallData, processor) -> dict:
         screen_call.expose_images = False
         screen_call.store_in_timeline = False
         screen_call.media_resolution = call.prescreen_media_resolution
+        # The main call's thinking level is tuned for the main model, not the screen
+        screen_call.thinking_level = None
 
         response = await asyncio.wait_for(
             request.call(screen_call), timeout=PRESCREEN_TIMEOUT

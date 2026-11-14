@@ -13,6 +13,7 @@ import json
 import base64
 from .const import (
     DOMAIN,
+    THINKING_LEVELS,
     CONF_API_KEY,
     CONF_PROVIDER,
     CONF_IP_ADDRESS,
@@ -237,6 +238,7 @@ class Request:
         try:
             # Make call to provider
             response_text = await provider_instance.vision_request(call)
+            usage = getattr(provider_instance, "last_usage", None)
         except Exception as e:
             _LOGGER.error(f"Provider {provider_name} failed: {e}")
             # Try fallback if configured and not already tried
@@ -333,6 +335,9 @@ class Request:
                     del result["response_text"]
         else:
             result["response_text"] = response_text
+
+        if usage:
+            result["usage"] = usage
 
         return result
 
@@ -1313,13 +1318,53 @@ class Google(Provider):
         endpoint={"base_url": ENDPOINT_GOOGLE},
     ):
         super().__init__(hass, api_key, model, endpoint)
+        self.last_usage: dict | None = None
 
     def supports_structured_output(self) -> bool:
         """Return True if provider supports structured output."""
         return True
 
     def _model_supports_thinking(self) -> bool:
-        return any(m in self.model for m in ["gemini-2.5", "gemini-3"])
+        return any(m in self.model for m in ["gemini-2.5", "gemini-3", "gemini-4"])
+
+    def _model_rejects_thinking_budget(self) -> bool:
+        # Gemini 4 only takes thinkingLevel; a thinkingBudget is a 400.
+        return "gemini-4" in self.model
+
+    def _thinking_config(self, call: Any, default_parameters: dict) -> dict | None:
+        """Pick the thinkingConfig for this call, or None to use the model default.
+
+        A per-call thinking_level wins. Otherwise the provider-wide
+        thinking_budget applies, except on models that reject budgets.
+        """
+        if not self._model_supports_thinking():
+            return None
+        level = getattr(call, "thinking_level", None)
+        if isinstance(level, str) and level.strip():
+            normalized = level.strip().upper()
+            if normalized not in THINKING_LEVELS:
+                raise ServiceValidationError(
+                    f"Invalid thinking_level '{level}'. Use one of: "
+                    + ", ".join(lv.lower() for lv in THINKING_LEVELS)
+                )
+            return {"thinkingLevel": normalized}
+        budget = default_parameters.get("thinking_budget", 0)
+        if budget > 0 and not self._model_rejects_thinking_budget():
+            return {"thinkingBudget": budget}
+        return None
+
+    @staticmethod
+    def _summarize_usage(usage: Any) -> dict | None:
+        """Turn Gemini usageMetadata into a small, stable dict."""
+        if not isinstance(usage, dict):
+            return None
+        return {
+            "prompt_tokens": usage.get("promptTokenCount", 0),
+            "thinking_tokens": usage.get("thoughtsTokenCount", 0),
+            "output_tokens": usage.get("candidatesTokenCount", 0),
+            "cached_tokens": usage.get("cachedContentTokenCount", 0),
+            "total_tokens": usage.get("totalTokenCount", 0),
+        }
 
     def _generate_headers(self) -> dict:
         return {"content-type": "application/json"}
@@ -1331,6 +1376,9 @@ class Google(Provider):
             )
             headers = self._generate_headers()
             response = await self._post(url=endpoint, headers=headers, data=data)
+            self.last_usage = self._summarize_usage(response.get("usageMetadata"))
+            if self.last_usage:
+                _LOGGER.info("Gemini usage (%s): %s", self.model, self.last_usage)
             candidates = response.get("candidates")
             if not candidates or not isinstance(candidates, list) or not candidates[0]:
                 raise ServiceValidationError(
@@ -1374,14 +1422,10 @@ class Google(Provider):
             if normalized in mapping:
                 payload["generationConfig"]["mediaResolution"] = mapping[normalized]
 
-        # Add thinking budget based on current model and config
-        if (
-            self._model_supports_thinking()
-            and default_parameters.get("thinking_budget", 0) > 0
-        ):
-            payload["generationConfig"]["thinkingConfig"] = {
-                "thinkingBudget": default_parameters.get("thinking_budget", 0)
-            }
+        # Thinking: per-call thinking_level, else the provider's budget
+        thinking_config = self._thinking_config(call, default_parameters)
+        if thinking_config:
+            payload["generationConfig"]["thinkingConfig"] = thinking_config
 
         # Add structured output support
         if call.response_format == "json" and call.structure:
@@ -1440,14 +1484,10 @@ class Google(Provider):
             },
         }
 
-        # Add thinking budget based on current model and config
-        if (
-            self._model_supports_thinking()
-            and default_parameters.get("thinking_budget", 0) > 0
-        ):
-            payload["generationConfig"]["thinkingConfig"] = {
-                "thinkingBudget": default_parameters.get("thinking_budget", 0)
-            }
+        # Thinking: per-call thinking_level, else the provider's budget
+        thinking_config = self._thinking_config(call, default_parameters)
+        if thinking_config:
+            payload["generationConfig"]["thinkingConfig"] = thinking_config
 
         # Add structured output support
         if call.response_format == "json" and call.structure:

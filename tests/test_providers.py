@@ -908,6 +908,69 @@ class TestGoogle:
 
             assert google._model_supports_thinking() is False
 
+    def test_thinking_level_overrides_budget(self, mock_hass):
+        """A per-call thinking_level beats the provider budget."""
+        with patch("custom_components.llmvision.providers.async_get_clientsession"):
+            google = Google(mock_hass, "k", "gemini-3.8-flash")
+            call = SimpleNamespace(thinking_level="low")
+            assert google._thinking_config(call, {"thinking_budget": 512}) == {
+                "thinkingLevel": "LOW"
+            }
+            call = SimpleNamespace(thinking_level=None)
+            assert google._thinking_config(call, {"thinking_budget": 512}) == {
+                "thinkingBudget": 512
+            }
+            assert google._thinking_config(call, {"thinking_budget": 0}) is None
+
+    def test_gemini_4_never_gets_thinking_budget(self, mock_hass):
+        """Gemini 4 rejects thinkingBudget, so only thinkingLevel is sent."""
+        with patch("custom_components.llmvision.providers.async_get_clientsession"):
+            google = Google(mock_hass, "k", "gemini-4-hydrogen")
+            assert google._model_supports_thinking() is True
+            no_level = SimpleNamespace(thinking_level=None)
+            assert google._thinking_config(no_level, {"thinking_budget": 512}) is None
+            assert google._thinking_config(
+                SimpleNamespace(thinking_level=" XHigh "), {"thinking_budget": 0}
+            ) == {"thinkingLevel": "XHIGH"}
+
+    def test_invalid_thinking_level_raises(self, mock_hass):
+        """An unknown thinking_level is a clear validation error."""
+        with patch("custom_components.llmvision.providers.async_get_clientsession"):
+            google = Google(mock_hass, "k", "gemini-4-hydrogen")
+            with pytest.raises(ServiceValidationError):
+                google._thinking_config(
+                    SimpleNamespace(thinking_level="extreme"), {"thinking_budget": 0}
+                )
+
+    def test_thinking_level_ignored_on_non_thinking_models(self, mock_hass):
+        """Older Gemini models get no thinkingConfig at all."""
+        with patch("custom_components.llmvision.providers.async_get_clientsession"):
+            google = Google(mock_hass, "k", "gemini-pro")
+            assert (
+                google._thinking_config(
+                    SimpleNamespace(thinking_level="low"), {"thinking_budget": 0}
+                )
+                is None
+            )
+
+    def test_summarize_usage(self, mock_hass):
+        """usageMetadata is reduced to a stable dict."""
+        assert Google._summarize_usage(None) is None
+        assert Google._summarize_usage(
+            {
+                "promptTokenCount": 2600,
+                "thoughtsTokenCount": 900,
+                "candidatesTokenCount": 120,
+                "totalTokenCount": 3620,
+            }
+        ) == {
+            "prompt_tokens": 2600,
+            "thinking_tokens": 900,
+            "output_tokens": 120,
+            "cached_tokens": 0,
+            "total_tokens": 3620,
+        }
+
 
 class TestGroq:
     """Test Groq provider class."""

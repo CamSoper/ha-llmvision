@@ -81,6 +81,9 @@ GENERATE_TITLE = "generate_title"
 SENSOR_ENTITY = "sensor_entity"
 LLM_PICK_KEYFRAME = "llm_pick_keyframe"
 MEDIA_RESOLUTION = "media_resolution"
+THINKING_LEVEL = "thinking_level"
+# Gemini thinkingLevel values. Gemini 4 rejects MINIMAL; the API reports that.
+THINKING_LEVELS = ("MINIMAL", "LOW", "MEDIUM", "HIGH", "XHIGH")
 
 # Pre-screen (stream_analyzer): a cheap model decides whether the main call is worth making
 PRESCREEN_MODEL = "prescreen_model"
